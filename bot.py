@@ -3,16 +3,21 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from config import BOT_TOKEN, ROLES, COMMAND_PERMISSIONS
 from database import Session, CommandLog
 import logging
+import random
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 def role_required(command_name: str):
+    """
+    Decorator to check user roles before executing a command.
+    This decorator is the primary way to enforce command permissions.
+    """
     def decorator(func):
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id = update.effective_user.id
             
-            # Get user's roles (default empty list)
+            # Get user's roles (default to an empty list)
             user_roles = ROLES.get(user_id, [])
             if not isinstance(user_roles, list):
                 user_roles = [user_roles]  # Convert single roles to list
@@ -32,6 +37,7 @@ def role_required(command_name: str):
                 return
                 
             if not has_access:
+                # Log the unauthorized attempt
                 _log_command(user_id, command_name, "unauthorized", user_roles=str(user_roles))
                 await update.message.reply_text(
                     f"⛔ Access Denied\n"
@@ -44,31 +50,42 @@ def role_required(command_name: str):
         return wrapper
     return decorator
 
+# --- Command Handlers ---
+
 @role_required("start")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Shows the main menu with available commands.
+    The list is now dynamically generated based on the user's roles.
+    """
     user_id = update.effective_user.id
-    # if user_id not in ADMIN_IDS:
-    #     await update.message.reply_text("❌ Unauthorized access")
-    #     return
+    user_roles = ROLES.get(user_id, [])
+    
+    # Get all commands available to the user based on their roles
+    permissions = set()
+    for role in user_roles:
+        permissions.update(COMMAND_PERMISSIONS.get(role, []))
 
-    await update.message.reply_text(
+    # Format the response with the list of commands
+    command_list = "\n".join([f"  • /{cmd}" for cmd in sorted(permissions)])
+    response = (
         "🚀 SIP Monitor Active\n"
         "Commands:\n"
-        "/start - Show this menu\n"
-        "/siptest - Test SIP connectivity\n"
-        "/mocksip - Mock SIP call",
-        reply_markup=ReplyKeyboardRemove()
+        f"{command_list}"
     )
-    _log_command(user_id, "start", "success")
+    
+    await update.message.reply_text(
+        response,
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML"
+    )
+    _log_command(user_id, "start", "success", user_roles=str(user_roles))
 
 @role_required("siptest")
 async def siptest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dummy SIP test response."""
     user_id = update.effective_user.id
-    # if user_id not in ADMIN_IDS:
-    #     await update.message.reply_text("❌ Unauthorized")
-    #     return
-
-    # Dummy SIP test response
+    # The redundant access check has been removed as the decorator handles it.
     response = "✅ SIP Test Result:\nTrunk: MockTrunk_01\nStatus: REGISTERED\nRTT: 42ms"
     await update.message.reply_text(response)
     _log_command(user_id, "siptest", "mock_ok")
@@ -76,7 +93,6 @@ async def siptest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @role_required("mocksip")
 async def mock_sip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Simulate SIP call with random results"""
-    import random
     user_id = update.effective_user.id
     
     # Mock SIP metrics
@@ -100,7 +116,7 @@ async def mock_sip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Duration: {duration_ms}ms"
     )
 
-# Remove it later
+# This command is temporary and will be removed later.
 @role_required("system")
 async def testlog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Temporary test command for logging"""
@@ -114,12 +130,12 @@ async def testlog(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("✅ Test log written")
 
-# Remove it later maybe
+# This command is for debugging roles and is good to keep.
 async def myrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the user's roles and permissions."""
     user_id = update.effective_user.id
     user_roles = ROLES.get(user_id, ["unauthorized"])
     
-    # Get permissions summary
     permissions = set()
     for role in user_roles:
         if role in COMMAND_PERMISSIONS:
@@ -131,9 +147,8 @@ async def myrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>🔑 Permissions:</b>\n"
     )
     
-    # Add permissions with bullet points
     for cmd in sorted(permissions):
-        response += f"  • /{cmd}\n"
+        response += f"  • /{cmd}\n"
     
     await update.message.reply_text(
         response,
@@ -145,23 +160,27 @@ def _log_command(
     user_id: int,
     command: str,
     status: str,
-    duration_ms: int = 0,
-    trunk_id: str = "MOCK_TRUNK",
+    duration_ms: int = None, # Made nullable as not all commands have duration
+    trunk_id: str = None, # Made nullable as not all commands are for trunks
     error_code: str = None,
-    raw_response: str = None
+    raw_response: str = None,
+    user_roles: str = "unauthorized"
 ):
+    """
+    Logs a command execution to the database.
+    This function has been slightly modified for robustness.
+    """
     session = Session()
-    role = ROLES.get(user_id, "unauthorized")  # Get role from config
     try:
         log_entry = CommandLog(
             user_id=user_id,
-            user_role = role,
+            user_role = user_roles,
             command=command,
             status=status,
             duration_ms=duration_ms,
             trunk_id=trunk_id,
             error_code=error_code,
-            raw_response=str(raw_response)[:1000]  # Truncate to prevent overflow
+            raw_response=str(raw_response)[:1000]
         )
         session.add(log_entry)
         session.commit()
