@@ -5,4 +5,4 @@ python-dotenv==1.0.0
 # cryptography==41.0.4
 # pytest==7.4.0
 # python-dateutil==2.8.2
-# pywin32==306  # For Windows users, if you are on a different OS, you can remove this line
+# pywin32==306
