@@ -13,6 +13,7 @@ class CommandLog(Base):
   timestamp = Column(DateTime, default=datetime.datetime.utcnow)  # UTC standardization
   command = Column(String(50))
   user_id = Column(Integer)
+  user_role = Column(String(20))
   status = Column(String(20))  # Renamed from mock_status
   duration_ms = Column(Integer)  # New: Call duration in milliseconds
   trunk_id = Column(String(20))  # New: e.g., "Trunk_EU_01"
