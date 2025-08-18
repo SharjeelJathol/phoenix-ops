@@ -1,13 +1,18 @@
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.helpers import escape_markdown
+
 from config import BOT_TOKEN, ROLES, COMMAND_PERMISSIONS
-from database import Session, CommandLog
+from database import Session, CommandLog, Vendor
+from ami_client import AMIClient
+from dialics_client import DialicsClient
 import logging
-import random
+import re
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+ami_client = AMIClient()
 def role_required(command_name: str):
     """Decorator to check user roles before executing a command."""
     def decorator(func):
@@ -46,31 +51,22 @@ def role_required(command_name: str):
 
 @role_required("start")
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Shows the main menu with available commands.
-    The list is now dynamically generated based on the user's roles.
-    """
+    """Shows the main menu with available commands based on the user's roles."""
     user_id = update.effective_user.id
     user_roles = ROLES.get(user_id, [])
     
-    # Get all commands available to the user based on their roles
     permissions = set()
     for role in user_roles:
         permissions.update(COMMAND_PERMISSIONS.get(role, []))
 
-    # Format the response with the list of commands
-    command_list = "\n".join([f"  • /{cmd}" for cmd in sorted(permissions)])
+    command_list = "\n".join([f"  • /{escape_markdown(cmd)}" for cmd in sorted(permissions)])
     response = (
-        "🚀 SIP Monitor Active\n"
-        "Commands:\n"
+        f"🚀 *ChaturBot SIP Monitor*\n\n"
+        f"Here are your available commands:\n"
         f"{command_list}"
     )
     
-    await update.message.reply_text(
-        response,
-        reply_markup=ReplyKeyboardRemove(),
-        parse_mode="HTML"
-    )
+    await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove(), parse_mode="MarkdownV2")
     _log_command(user_id, "start", "success", user_roles=str(user_roles))
 
 @role_required("siptest")
