@@ -9,35 +9,27 @@ import random
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 def role_required(command_name: str):
-    """
-    Decorator to check user roles before executing a command.
-    This decorator is the primary way to enforce command permissions.
-    """
+    """Decorator to check user roles before executing a command."""
     def decorator(func):
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id = update.effective_user.id
-            
-            # Get user's roles (default to an empty list)
             user_roles = ROLES.get(user_id, [])
             if not isinstance(user_roles, list):
-                user_roles = [user_roles]  # Convert single roles to list
-            
-            # Get roles that have permission for this command
+                user_roles = [user_roles]
+
             allowed_roles = [
-                role for role, commands in COMMAND_PERMISSIONS.items() 
+                role for role, commands in COMMAND_PERMISSIONS.items()
                 if command_name in commands
             ]
-            
-            # Check if user has ANY allowed role
+
             has_access = any(role in allowed_roles for role in user_roles)
-            
+
             if not allowed_roles:
                 logging.error(f"No permissions configured for command: {command_name}")
                 await update.message.reply_text("⚠️ System configuration error")
                 return
-                
+
             if not has_access:
-                # Log the unauthorized attempt
                 _log_command(user_id, command_name, "unauthorized", user_roles=str(user_roles))
                 await update.message.reply_text(
                     f"⛔ Access Denied\n"
@@ -45,7 +37,7 @@ def role_required(command_name: str):
                     f"Your roles: {', '.join(user_roles) or 'None'}"
                 )
                 return
-                
+
             return await func(update, context)
         return wrapper
     return decorator
