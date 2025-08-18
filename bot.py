@@ -8,10 +8,13 @@ from ami_client import AMIClient
 from dialics_client import DialicsClient
 import logging
 import re
+import asyncio
+
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+# --- Client Initialization ---
 ami_client = AMIClient()
 def role_required(command_name: str):
     """Decorator to check user roles before executing a command."""
@@ -69,40 +72,66 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove(), parse_mode="MarkdownV2")
     _log_command(user_id, "start", "success", user_roles=str(user_roles))
 
-@role_required("siptest")
-async def siptest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Dummy SIP test response."""
+@role_required("sipstatus")
+async def sipstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Performs a live SIP status check for all peers and sorts them."""
     user_id = update.effective_user.id
-    # The redundant access check has been removed as the decorator handles it.
-    response = "✅ SIP Test Result:\nTrunk: MockTrunk_01\nStatus: REGISTERED\nRTT: 42ms"
-    await update.message.reply_text(response)
-    _log_command(user_id, "siptest", "mock_ok")
+    await update.message.reply_text("Running live SIP peer status check...")
 
-@role_required("mocksip")
-async def mock_sip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Simulate SIP call with random results"""
-    user_id = update.effective_user.id
+    # CORRECTED: Directly await the asynchronous function
+    raw_response = await ami_client.send_action({'Action': 'SIPpeers'})
+
+    if "Error:" in raw_response:
+        error_msg = escape_markdown(raw_response)
+        await update.message.reply_text(f"❌ *AMI Connection Failed*\n`{error_msg}`", parse_mode="MarkdownV2")
+        _log_command(user_id, "sipstatus", "ami_error", raw_response=raw_response)
+        return
+
+    peers = re.findall(r'Event: PeerEntry\s*(.*?)\s*(?=Event: PeerEntry|Event: PeerlistComplete)', raw_response, re.DOTALL)
     
-    # Mock SIP metrics
-    status = random.choice(["REGISTERED", "TIMEOUT", "AUTH_FAIL"])
-    duration_ms = random.randint(50, 500)
-    trunk = f"Trunk_{random.choice(['EU','US','ASIA'])}_01"
+    reg_trunks = []
+    unreg_trunks = []
+    reg_exts = []
+    unreg_exts = []
     
-    _log_command(
-        user_id=user_id,
-        command="mock_sip",
-        status=status,
-        duration_ms=duration_ms,
-        trunk_id=trunk,
-        raw_response=f"Code: {random.randint(200, 600)} | RTT: {duration_ms}ms"
-    )
+    for peer_data in peers:
+        name_match = re.search(r'ObjectName: (\S+)', peer_data)
+        status_match = re.search(r'Status: (.*)', peer_data)
+        
+        if name_match and status_match:
+            name_str = name_match.group(1)
+            status_str = status_match.group(1).strip()
+            
+            is_extension = name_str.isdigit()
+
+            if is_extension:
+                if "OK" in status_str:
+                    reg_exts.append(f"  ✅ `{escape_markdown(name_str)}`")
+                else:
+                    unreg_exts.append(f"  ❌ `{escape_markdown(name_str)}` \\(Status: {escape_markdown(status_str)}\\)")
+            else:
+                if "OK" in status_str:
+                    reg_trunks.append(f"  ✅ `{escape_markdown(name_str)}`")
+                else:
+                    unreg_trunks.append(f"  ❌ `{escape_markdown(name_str)}` \\(Status: {escape_markdown(status_str)}\\)")
+
+    response_parts = ["📊 *Live SIP Peer Status*\n"]
+    if reg_trunks:
+        response_parts.append("*Registered Trunks:*\n" + "\n".join(reg_trunks))
+    if unreg_trunks:
+        response_parts.append("*Unregistered Trunks:*\n" + "\n".join(unreg_trunks))
+    if reg_exts:
+        response_parts.append("*Registered Extensions:*\n" + "\n".join(reg_exts))
+    if unreg_exts:
+        response_parts.append("*Unregistered Extensions:*\n" + "\n".join(unreg_exts))
+
+    if len(response_parts) == 1:
+        response_parts.append("No SIP peers found.")
+
+    response_message = "\n\n".join(response_parts)
     
-    await update.message.reply_text(
-        f"📞 Mock SIP Result:\n"
-        f"Status: {status}\n"
-        f"Trunk: {trunk}\n"
-        f"Duration: {duration_ms}ms"
-    )
+    await update.message.reply_text(response_message, parse_mode="MarkdownV2")
+    _log_command(user_id, "sipstatus", "success", raw_response=f"Found {len(peers)} peers.")
 
 # This command is temporary and will be removed later.
 @role_required("system")
