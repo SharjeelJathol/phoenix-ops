@@ -1,7 +1,7 @@
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.helpers import escape_markdown
-
+from config import DIALICS_API_KEY
 from config import BOT_TOKEN, ROLES, COMMAND_PERMISSIONS
 from database import Session, CommandLog, Vendor
 from ami_client import AMIClient
@@ -9,7 +9,6 @@ from dialics_client import DialicsClient
 from sqlalchemy import text
 import logging
 import re
-import asyncio
 
 
 # Enable logging
@@ -17,6 +16,8 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # --- Client Initialization ---
 ami_client = AMIClient()
+dialics_client = DialicsClient()
+
 def role_required(command_name: str):
     """Decorator to check user roles before executing a command."""
     def decorator(func):
@@ -167,6 +168,103 @@ async def sipstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response_message, parse_mode="MarkdownV2")
     _log_command(user_id, "sipstatus", "success", raw_response=f"Found {len(peers)} peers.")
 
+@role_required("status")
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Dialics vendor status:
+    - Resolves vendor from DB (by name arg or single vendor fallback)
+    - Pings Dialics via DialicsClient
+    - Attempts to fetch campaign KPIs if campaign_id is present (graceful fallback)
+    """
+    user_id = update.effective_user.id
+    session = Session()
+    try:
+        # Resolve vendor
+        args = context.args if hasattr(context, "args") else []
+        vendor_arg = args[0] if args else None
+
+        if vendor_arg:
+            vendor = session.query(Vendor).filter(Vendor.vendor_name.ilike(vendor_arg)).first()
+            if not vendor:
+                await update.message.reply_text(
+                    f"<b>Vendor not found:</b> {vendor_arg}",
+                    parse_mode="HTML",
+                )
+                _log_command(user_id, "status", "not_found", raw_response=vendor_arg)
+                return
+        else:
+            vendors = session.query(Vendor).all()
+            if not vendors:
+                await update.message.reply_text(
+                    "No vendors found. Use <code>/addvendor</code> to register one.",
+                    parse_mode="HTML",
+                )
+                _log_command(user_id, "status", "no_vendors")
+                return
+            if len(vendors) > 1:
+                listing = "\n".join([f" • {v.vendor_name} (campaign: {v.campaign_id or '—'})" for v in vendors])
+                await update.message.reply_text(
+                    f"<b>Multiple vendors found.</b>\nUse <code>/status &lt;vendor_name&gt;</code>\n\n{listing}",
+                    parse_mode="HTML",
+                )
+                _log_command(user_id, "status", "ambiguous")
+                return
+            vendor = vendors[0]
+
+        # Dialics connectivity + KPI (graceful)
+        dialics_ok = False
+        dialics_note = ""
+        kpi_line = "KPI: —"
+
+        try:
+            ping_info = await dialics_client.ping()  # should return dict like {"ok": True, "workspaces": N}
+            dialics_ok = bool(ping_info and ping_info.get("ok"))
+            if dialics_ok and "workspaces" in ping_info:
+                dialics_note = f" (workspaces: {ping_info['workspaces']})"
+        except Exception as e:
+            dialics_note = f" (error: {str(e)})"
+
+        # Attempt KPI pull if campaign_id present (method should be implemented in DialicsClient)
+        if getattr(vendor, "campaign_id", None):
+            try:
+                kpi = await dialics_client.get_campaign_kpis(vendor.campaign_id)
+                if kpi:
+                    # Expect keys; handle missing keys gracefully
+                    asr = kpi.get("asr")
+                    acd = kpi.get("acd")
+                    leads = kpi.get("leads") or kpi.get("lead_count")
+                    parts = []
+                    if asr is not None: parts.append(f"ASR {asr}%")
+                    if acd is not None: parts.append(f"ACD {acd}s")
+                    if leads is not None: parts.append(f"Leads {leads}")
+                    if parts:
+                        kpi_line = "KPI: " + ", ".join(parts)
+            except Exception as e:
+                kpi_line = f"KPI: error ({str(e)})"
+
+        # Compose response
+        dialics_icon = "✅" if dialics_ok else "❌"
+        response = (
+            f"📊 <b>Vendor Status</b>\n"
+            f"<b>Vendor:</b> {vendor.vendor_name}\n"
+            f"<b>Campaign:</b> {vendor.campaign_id or '—'}\n"
+            f"<b>Test DID:</b> {vendor.test_did or '—'}\n"
+            f"<b>Dialics:</b> {dialics_icon}{dialics_note}\n"
+            f"{kpi_line}\n"
+        )
+
+        await update.message.reply_text(response, parse_mode="HTML")
+        _log_command(user_id, "status", "success", raw_response=response)
+
+    except Exception as e:
+        logging.error(f"/status error: {e}")
+        await update.message.reply_text(
+            f"❌ <b>Status failed:</b> {str(e)}",
+            parse_mode="HTML",
+        )
+        _log_command(user_id, "status", "error", raw_response=str(e))
+    finally:
+        session.close()
 # This command is temporary and will be removed later.
 @role_required("system")
 async def testlog(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -246,6 +344,7 @@ def main():
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("sipstatus", sipstatus))
+    application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("testlog", testlog))
     # application.add_handler(CommandHandler("mocksip", mock_sip))
     application.add_handler(CommandHandler("myrole", myrole))
