@@ -6,6 +6,7 @@ from config import BOT_TOKEN, ROLES, COMMAND_PERMISSIONS
 from database import Session, CommandLog, Vendor
 from ami_client import AMIClient
 from dialics_client import DialicsClient
+from sqlalchemy import text
 import logging
 import re
 import asyncio
@@ -71,6 +72,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove(), parse_mode="MarkdownV2")
     _log_command(user_id, "start", "success", user_roles=str(user_roles))
+
+# @role_required("health")
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Simple health check for AMI + DB"""
+    user_id = update.effective_user.id
+
+    # --- Check AMI ---
+    ami_status = "❌"
+    try:
+        result = await ami_client.connect()
+        if result:
+            ami_status = "✅"
+    except Exception as e:
+        ami_status = f"❌ ({str(e)})"
+
+    # --- Check DB ---
+    db_status = "❌"
+    try:
+        session = Session()
+        session.execute(text("SELECT 1"))
+        session.close()
+        db_status = "✅"
+    except Exception as e:
+        db_status = f"❌ ({str(e)})"
+
+    response = (
+    f"📊 <b>Health Check</b>\n\n"
+    f"AMI: {ami_status}\n"
+    f"DB: {db_status}\n"
+    )
+    await update.message.reply_text(response, parse_mode="HTML")
+
+    _log_command(user_id, "health", "success", raw_response=response)
 
 @role_required("sipstatus")
 async def sipstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,6 +249,7 @@ def main():
     application.add_handler(CommandHandler("testlog", testlog))
     # application.add_handler(CommandHandler("mocksip", mock_sip))
     application.add_handler(CommandHandler("myrole", myrole))
+    application.add_handler(CommandHandler("health", health))
 
     # Start bot
     application.run_polling()
