@@ -211,9 +211,9 @@ def main():
     
     # Register handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("siptest", siptest))
+    application.add_handler(CommandHandler("sipstatus", sipstatus))
     application.add_handler(CommandHandler("testlog", testlog))
-    application.add_handler(CommandHandler("mocksip", mock_sip))
+    # application.add_handler(CommandHandler("mocksip", mock_sip))
     application.add_handler(CommandHandler("myrole", myrole))
 
     # Start bot
